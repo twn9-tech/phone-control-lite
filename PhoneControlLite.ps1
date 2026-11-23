@@ -6,9 +6,11 @@ Add-Type -AssemblyName System.ComponentModel
 $script:Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:ToolDir = Join-Path $script:Root 'scrcpy'
 $script:AdbExe = Join-Path $script:ToolDir 'adb.exe'
+$script:ScrcpyExe = Join-Path $script:ToolDir 'scrcpy.exe'
 $script:MaxDevices = 30
 $script:Devices = @()
 $script:ActiveSerial = $null
+$script:LiveProcesses = @()
 $script:PreviewWorker = New-Object System.ComponentModel.BackgroundWorker
 $script:PreviewWorker.WorkerSupportsCancellation = $false
 
@@ -88,16 +90,18 @@ $form.Controls.Add($sendText)
 $textButton = New-Button 'Kirim' 1112 87 75 $true
 
 $status = New-Object System.Windows.Forms.Label
-$status.Text = 'Status: unduh scrcpy dahulu. Preview diperbarui berkala, bukan video langsung.'
-$status.Location = New-Object System.Drawing.Point(22,132)
+$liveButton = New-Button 'Buka mosaik LIVE (maks. 30)' 20 127 220 $true
+$closeLiveButton = New-Button 'Tutup mosaik LIVE' 250 127 160
+$status.Text = 'Status: unduh scrcpy dahulu. Preview grid berkala; mosaik LIVE memakai video scrcpy.'
+$status.Location = New-Object System.Drawing.Point(22,169)
 $status.Size = New-Object System.Drawing.Size(1170,24)
 $status.Anchor = 'Top,Left,Right'
 $status.ForeColor = [System.Drawing.Color]::FromArgb(251,191,36)
 $form.Controls.Add($status)
 
 $panel = New-Object System.Windows.Forms.FlowLayoutPanel
-$panel.Location = New-Object System.Drawing.Point(20,164)
-$panel.Size = New-Object System.Drawing.Size(1180,635)
+$panel.Location = New-Object System.Drawing.Point(20,201)
+$panel.Size = New-Object System.Drawing.Size(1180,598)
 $panel.Anchor = 'Top,Bottom,Left,Right'
 $panel.AutoScroll = $true
 $panel.WrapContents = $true
@@ -109,6 +113,8 @@ function Set-ReadyState {
   $ready = Test-Path $script:AdbExe
   $refresh.Enabled = $ready
   $selectAll.Enabled = $ready
+  $liveButton.Enabled = (Test-Path $script:ScrcpyExe)
+  $closeLiveButton.Enabled = ($script:LiveProcesses.Count -gt 0)
   if ($ready) {
     $status.Text = 'ADB siap. Sambungkan HP, setujui USB debugging pada tiap HP, lalu tekan Muat ulang HP.'
     $status.ForeColor = [System.Drawing.Color]::FromArgb(96,225,190)
@@ -128,6 +134,73 @@ function Get-ScreenSize($serial) {
     }
   } catch { }
   return @{ Width=1080; Height=1920 }
+}
+
+function Close-LiveMosaic {
+  foreach ($proc in $script:LiveProcesses) {
+    try {
+      if ($proc -and -not $proc.HasExited) { $proc.Kill() }
+    } catch { }
+  }
+  $script:LiveProcesses = @()
+  $closeLiveButton.Enabled = $false
+}
+
+function Start-LiveMosaic {
+  if (-not (Test-Path $script:ScrcpyExe)) {
+    [System.Windows.Forms.MessageBox]::Show('Tekan Unduh / Perbarui dahulu untuk memasang scrcpy.','Phone Control Lite') | Out-Null
+    return
+  }
+  $readyDevices = @($script:Devices | Where-Object { $_.State -eq 'device' })
+  if ($readyDevices.Count -eq 0) {
+    [System.Windows.Forms.MessageBox]::Show('Tekan Muat ulang HP dan pastikan setidaknya satu perangkat berstatus device.','Belum ada HP siap') | Out-Null
+    return
+  }
+  if ($readyDevices.Count -gt $script:MaxDevices) { $readyDevices = @($readyDevices | Select-Object -First $script:MaxDevices) }
+  $selectedDevices = @($readyDevices | Where-Object { $_.Select.Checked })
+  if ($selectedDevices.Count -gt 0) { $readyDevices = $selectedDevices }
+  $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+  $columns = [int][Math]::Ceiling([Math]::Sqrt($readyDevices.Count))
+  $rows = [int][Math]::Ceiling($readyDevices.Count/[double]$columns)
+  $cellW = [int][Math]::Floor($screen.Width/[double]$columns)
+  $cellH = [int][Math]::Floor($screen.Height/[double]$rows)
+  $msg = "Akan membuka $($readyDevices.Count) stream scrcpy live dalam mosaik pada monitor utama.`r`nResolusi dibatasi 480 px, maksimum 8 fps, audio mati. Performa bergantung pada PC dan USB.`r`n`r`nLanjutkan?"
+  if ([System.Windows.Forms.MessageBox]::Show($msg,'Mosaik LIVE','YesNo','Warning') -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+  Close-LiveMosaic
+  $timer.Stop()
+  $started = 0
+  for ($i=0; $i -lt $readyDevices.Count; $i++) {
+    $device = $readyDevices[$i]
+    $col = $i % $columns; $row = [int][Math]::Floor($i/[double]$columns)
+    $ratio = [Math]::Max(0.25,$device.Width/[double][Math]::Max(1,$device.Height))
+    $winW = $cellW; $winH = $cellH
+    if (($winW/[double]$winH) -gt $ratio) { $winW = [int][Math]::Floor($winH*$ratio) }
+    else { $winH = [int][Math]::Floor($winW/$ratio) }
+    $winX = [int]($screen.Left + $col*$cellW + ($cellW-$winW)/2)
+    $winY = [int]($screen.Top + $row*$cellH + ($cellH-$winH)/2)
+    $args = @(
+      "--serial=$($device.Serial)", '--max-size=480', '--max-fps=8',
+      '--video-bit-rate=1M', '--no-audio', '--window-borderless',
+      "--window-x=$winX", "--window-y=$winY", "--window-width=$winW", "--window-height=$winH",
+      "--window-title=PCL_$($i+1)"
+    )
+    try {
+      $proc = Start-Process -FilePath $script:ScrcpyExe -WorkingDirectory $script:ToolDir -ArgumentList $args -PassThru
+      $script:LiveProcesses += $proc
+      $started++
+      Start-Sleep -Milliseconds 180
+    } catch { }
+  }
+  $closeLiveButton.Enabled = ($script:LiveProcesses.Count -gt 0)
+  if ($started -eq 0) {
+    $status.Text = 'Gagal membuka jendela scrcpy. Periksa instalasi scrcpy, kabel, dan status USB debugging.'
+    $status.ForeColor = [System.Drawing.Color]::FromArgb(248,113,113)
+    $timer.Start()
+    return
+  }
+  $status.Text = "Mosaik live dibuka: $started/$($readyDevices.Count) HP · $columns kolom × $rows baris · 480 px/8 fps."
+  $status.ForeColor = [System.Drawing.Color]::FromArgb(96,225,190)
+  $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
 }
 
 function Get-SelectedTargets($singleSerial=$null) {
@@ -378,10 +451,12 @@ $refresh.Add_Click({
 })
 
 $selectAll.Add_Click({ foreach ($device in $script:Devices) { if ($device.State -eq 'device') { $device.Select.Checked = $true } } })
+$liveButton.Add_Click({ Start-LiveMosaic })
+$closeLiveButton.Add_Click({ Close-LiveMosaic; $timer.Start(); $status.Text = 'Semua jendela mosaik live Phone Control Lite ditutup.' })
 $back.Add_Click({ Send-Action 'back' })
 $homeButton.Add_Click({ Send-Action 'home' })
 $textButton.Add_Click({ Send-Action 'text' $null 0 0 0 0 350 $sendText.Text })
-$form.Add_FormClosing({ $timer.Stop(); foreach ($device in $script:Devices) { if ($device.Picture.Image) { $device.Picture.Image.Dispose() } } })
+$form.Add_FormClosing({ $timer.Stop(); Close-LiveMosaic; foreach ($device in $script:Devices) { if ($device.Picture.Image) { $device.Picture.Image.Dispose() } } })
 
 Set-ReadyState
 $timer.Start()
