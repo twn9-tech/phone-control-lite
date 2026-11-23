@@ -1,6 +1,26 @@
 ﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.ComponentModel
+if (-not ('PCLWin32' -as [type])) {
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class PCLWin32 {
+  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string className, string windowName);
+  [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW", SetLastError=true)] private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int index);
+  [DllImport("user32.dll", EntryPoint="GetWindowLongW", SetLastError=true)] private static extern int GetWindowLong32(IntPtr hWnd, int index);
+  [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int index, IntPtr value);
+  [DllImport("user32.dll", EntryPoint="SetWindowLongW", SetLastError=true)] private static extern int SetWindowLong32(IntPtr hWnd, int index, int value);
+  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+  [DllImport("user32.dll", EntryPoint="GetParent", SetLastError=true)] public static extern IntPtr GetParent(IntPtr child);
+  [DllImport("user32.dll", SetLastError=true)] public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int width, int height, bool repaint);
+  [DllImport("user32.dll", SetLastError=true)] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+  public static int GetStyle(IntPtr hWnd) { return IntPtr.Size == 8 ? unchecked((int)GetWindowLongPtr64(hWnd,-16).ToInt64()) : GetWindowLong32(hWnd,-16); }
+  public static void SetStyle(IntPtr hWnd, int value) { if (IntPtr.Size == 8) SetWindowLongPtr64(hWnd,-16,new IntPtr(value)); else SetWindowLong32(hWnd,-16,value); }
+}
+"@
+}
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:Root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -19,6 +39,7 @@ $form.Text = 'Phone Control Lite — Multi HP'
 $form.Size = New-Object System.Drawing.Size(1240,850)
 $form.MinimumSize = New-Object System.Drawing.Size(900,650)
 $form.StartPosition = 'CenterScreen'
+$form.WindowState = [System.Windows.Forms.FormWindowState]::Maximized
 $form.BackColor = [System.Drawing.Color]::FromArgb(17,24,39)
 $form.ForeColor = [System.Drawing.Color]::FromArgb(229,231,235)
 $form.Font = New-Object System.Drawing.Font('Segoe UI',9.5)
@@ -90,9 +111,9 @@ $form.Controls.Add($sendText)
 $textButton = New-Button 'Kirim' 1112 87 75 $true
 
 $status = New-Object System.Windows.Forms.Label
-$liveButton = New-Button 'Buka mosaik LIVE (maks. 30)' 20 127 220 $true
-$closeLiveButton = New-Button 'Tutup mosaik LIVE' 250 127 160
-$status.Text = 'Status: unduh scrcpy dahulu. Preview grid berkala; mosaik LIVE memakai video scrcpy.'
+$liveButton = New-Button 'Tampilkan layar LIVE di sini' 20 127 220 $true
+$closeLiveButton = New-Button 'Tutup layar LIVE' 250 127 160
+$status.Text = 'Status: unduh scrcpy dahulu. Layar live akan tampil di dalam dashboard.'
 $status.Location = New-Object System.Drawing.Point(22,169)
 $status.Size = New-Object System.Drawing.Size(1170,24)
 $status.Anchor = 'Top,Left,Right'
@@ -103,7 +124,7 @@ $panel = New-Object System.Windows.Forms.FlowLayoutPanel
 $panel.Location = New-Object System.Drawing.Point(20,201)
 $panel.Size = New-Object System.Drawing.Size(1180,598)
 $panel.Anchor = 'Top,Bottom,Left,Right'
-$panel.AutoScroll = $true
+$panel.AutoScroll = $false
 $panel.WrapContents = $true
 $panel.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRight
 $panel.BackColor = [System.Drawing.Color]::FromArgb(17,24,39)
@@ -136,14 +157,25 @@ function Get-ScreenSize($serial) {
   return @{ Width=1080; Height=1920 }
 }
 
-function Close-LiveMosaic {
+function Close-LiveMosaic($resumeSnapshots=$true) {
+  if ($liveWatchTimer) { $liveWatchTimer.Stop() }
   foreach ($proc in $script:LiveProcesses) {
     try {
       if ($proc -and -not $proc.HasExited) { $proc.Kill() }
     } catch { }
   }
   $script:LiveProcesses = @()
+  foreach ($device in $script:Devices) {
+    if ($device.Host) { $device.Host.Visible = $false }
+    if ($device.Picture) { $device.Picture.Visible = $true }
+    if ($device.LiveWindowHandle -ne [IntPtr]::Zero) { $device.LiveWindowHandle = [IntPtr]::Zero }
+    if ($device.LiveProcess) { $device.LiveProcess = $null }
+  }
   $closeLiveButton.Enabled = $false
+  if ($resumeSnapshots -and $timer -and -not $form.IsDisposed) {
+    $timer.Interval = if ($broadcast.Checked) { 1200 } else { 4500 }
+    $timer.Start()
+  }
 }
 
 function Start-LiveMosaic {
@@ -159,48 +191,110 @@ function Start-LiveMosaic {
   if ($readyDevices.Count -gt $script:MaxDevices) { $readyDevices = @($readyDevices | Select-Object -First $script:MaxDevices) }
   $selectedDevices = @($readyDevices | Where-Object { $_.Select.Checked })
   if ($selectedDevices.Count -gt 0) { $readyDevices = $selectedDevices }
-  $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-  $columns = [int][Math]::Ceiling([Math]::Sqrt($readyDevices.Count))
-  $rows = [int][Math]::Ceiling($readyDevices.Count/[double]$columns)
-  $cellW = [int][Math]::Floor($screen.Width/[double]$columns)
-  $cellH = [int][Math]::Floor($screen.Height/[double]$rows)
-  $msg = "Akan membuka $($readyDevices.Count) stream scrcpy live dalam mosaik pada monitor utama.`r`nResolusi dibatasi 480 px, maksimum 8 fps, audio mati. Performa bergantung pada PC dan USB.`r`n`r`nLanjutkan?"
-  if ([System.Windows.Forms.MessageBox]::Show($msg,'Mosaik LIVE','YesNo','Warning') -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+  Layout-DeviceCards
+  $msg = "Akan menampilkan $($readyDevices.Count) layar scrcpy LIVE langsung di dalam dashboard.`r`nStream dibatasi 480 px, maksimum 8 fps, audio mati. Performa bergantung pada PC dan USB.`r`n`r`nLanjutkan?"
+  if ([System.Windows.Forms.MessageBox]::Show($msg,'Layar LIVE di dashboard','YesNo','Warning') -ne [System.Windows.Forms.DialogResult]::Yes) { return }
   Close-LiveMosaic
   $timer.Stop()
   $started = 0
-  for ($i=0; $i -lt $readyDevices.Count; $i++) {
-    $device = $readyDevices[$i]
-    $col = $i % $columns; $row = [int][Math]::Floor($i/[double]$columns)
-    $ratio = [Math]::Max(0.25,$device.Width/[double][Math]::Max(1,$device.Height))
-    $winW = $cellW; $winH = $cellH
-    if (($winW/[double]$winH) -gt $ratio) { $winW = [int][Math]::Floor($winH*$ratio) }
-    else { $winH = [int][Math]::Floor($winW/$ratio) }
-    $winX = [int]($screen.Left + $col*$cellW + ($cellW-$winW)/2)
-    $winY = [int]($screen.Top + $row*$cellH + ($cellH-$winH)/2)
+  $failedDevices = @()
+  $index = 0
+  foreach ($device in $readyDevices) {
+    $index++
+    $proc = $null
+    $windowTitle = 'PCL_LIVE_' + $index
     $args = @(
       "--serial=$($device.Serial)", '--max-size=480', '--max-fps=8',
       '--video-bit-rate=1M', '--no-audio', '--window-borderless',
-      "--window-x=$winX", "--window-y=$winY", "--window-width=$winW", "--window-height=$winH",
-      "--window-title=PCL_$($i+1)"
+      "--window-width=$($device.Host.ClientSize.Width)", "--window-height=$($device.Host.ClientSize.Height)",
+      "--window-title=$windowTitle"
     )
     try {
       $proc = Start-Process -FilePath $script:ScrcpyExe -WorkingDirectory $script:ToolDir -ArgumentList $args -PassThru
+      $device.LiveProcess = $proc
+      $hwnd = [IntPtr]::Zero
+      for ($attempt=0; $attempt -lt 60 -and $hwnd -eq [IntPtr]::Zero; $attempt++) {
+        $proc.Refresh()
+        $hwnd = [PCLWin32]::FindWindow($null,$windowTitle)
+        if ($hwnd -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 150 }
+      }
+      if ($hwnd -eq [IntPtr]::Zero) { throw "Jendela scrcpy untuk $($device.Label) tidak muncul." }
+      $style = [PCLWin32]::GetStyle($hwnd)
+      if (($style -band 0x80000000) -ne 0) { $style = $style -band 0x7FFFFFFF }
+      $style = $style -band (-bnot 0x00CF0000)
+      $style = $style -bor 0x40000000
+      [PCLWin32]::SetStyle($hwnd,$style)
+      [void][PCLWin32]::SetParent($hwnd,$device.Host.Handle)
+      if ([PCLWin32]::GetParent($hwnd) -ne $device.Host.Handle) { throw 'Jendela scrcpy belum menjadi bagian dari kartu dashboard.' }
+      if (-not [PCLWin32]::SetWindowPos($hwnd,[IntPtr]::Zero,0,0,$device.Host.ClientSize.Width,$device.Host.ClientSize.Height,0x34)) { throw 'SetWindowPos gagal saat memasang layar ke kartu.' }
+      if (-not [PCLWin32]::MoveWindow($hwnd,0,0,$device.Host.ClientSize.Width,$device.Host.ClientSize.Height,$true)) { throw 'MoveWindow gagal saat mengatur ukuran layar.' }
+      [void][PCLWin32]::ShowWindow($hwnd,5)
+      $device.LiveWindowHandle = $hwnd
       $script:LiveProcesses += $proc
+      $device.Picture.Visible = $false
+      $device.Host.Visible = $true
+      $device.Host.BringToFront()
       $started++
-      Start-Sleep -Milliseconds 180
-    } catch { }
+    } catch {
+      if ($proc) { try { if (-not $proc.HasExited) { $proc.Kill() } } catch { } }
+      $device.LiveProcess = $null
+      $device.LiveWindowHandle = [IntPtr]::Zero
+      $device.Host.Visible = $false
+      $device.Picture.Visible = $true
+      $failedDevices += "$($device.Label): $($_.Exception.Message)"
+    }
   }
   $closeLiveButton.Enabled = ($script:LiveProcesses.Count -gt 0)
   if ($started -eq 0) {
-    $status.Text = 'Gagal membuka jendela scrcpy. Periksa instalasi scrcpy, kabel, dan status USB debugging.'
+    $status.Text = 'Tidak ada layar live yang tampil. Periksa scrcpy, kabel, dan izin USB debugging.'
     $status.ForeColor = [System.Drawing.Color]::FromArgb(248,113,113)
     $timer.Start()
     return
   }
-  $status.Text = "Mosaik live dibuka: $started/$($readyDevices.Count) HP · $columns kolom × $rows baris · 480 px/8 fps."
-  $status.ForeColor = [System.Drawing.Color]::FromArgb(96,225,190)
-  $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+  if ($broadcast.Checked) {
+    foreach ($device in $readyDevices) { $device.Host.Visible = $false; $device.Picture.Visible = $true }
+    $timer.Interval = 1200
+    $timer.Start()
+  }
+  if ($failedDevices.Count -gt 0) {
+    $status.Text = "Layar LIVE tertanam: $started/$($readyDevices.Count) HP. Gagal: $($failedDevices -join '; ')"
+    $status.ForeColor = [System.Drawing.Color]::FromArgb(251,191,36)
+  } else {
+    $status.Text = "Layar LIVE tertanam di dashboard: $started/$($readyDevices.Count) HP · 480 px/8 fps. Klik layar untuk mengontrol HP masing-masing."
+    $status.ForeColor = [System.Drawing.Color]::FromArgb(96,225,190)
+  }
+  $liveWatchTimer.Start()
+}
+
+function Watch-LiveProcesses {
+  $ended = 0
+  foreach ($device in $script:Devices) {
+    if ($device.LiveProcess) {
+      $hasExited = $false
+      try { $hasExited = $device.LiveProcess.HasExited } catch { $hasExited = $true }
+      if ($hasExited) {
+        $device.LiveProcess = $null
+        $device.LiveWindowHandle = [IntPtr]::Zero
+        $device.Host.Visible = $false
+        $device.Picture.Visible = $true
+        $ended++
+      }
+    }
+  }
+  $alive = @()
+  foreach ($proc in $script:LiveProcesses) {
+    try { if (-not $proc.HasExited) { $alive += $proc } } catch { }
+  }
+  $script:LiveProcesses = $alive
+  $closeLiveButton.Enabled = ($script:LiveProcesses.Count -gt 0)
+  if ($ended -gt 0) {
+    $status.Text = "$ended stream live terhenti; kartu terkait kembali ke snapshot."
+    $status.ForeColor = [System.Drawing.Color]::FromArgb(251,191,36)
+  }
+  if ($script:LiveProcesses.Count -eq 0) {
+    $liveWatchTimer.Stop()
+    if (-not $broadcast.Checked) { $timer.Interval = 4500; $timer.Start() }
+  }
 }
 
 function Get-SelectedTargets($singleSerial=$null) {
@@ -291,6 +385,15 @@ function New-DeviceCard($device) {
   $picture.Tag = $device.Serial
   $card.Controls.Add($picture)
 
+  $screenHost = New-Object System.Windows.Forms.Panel
+  $screenHost.Location = New-Object System.Drawing.Point(10,35)
+  $screenHost.Size = New-Object System.Drawing.Size(198,275)
+  $screenHost.BackColor = [System.Drawing.Color]::FromArgb(8,13,18)
+  $screenHost.BorderStyle = 'FixedSingle'
+  $screenHost.Tag = $device.Serial
+  $screenHost.Visible = $false
+  $card.Controls.Add($screenHost)
+
   $state = New-Object System.Windows.Forms.Label
   $state.Text = "$($device.State) · $($device.Serial)"
   $state.Location = New-Object System.Drawing.Point(10,316)
@@ -321,9 +424,53 @@ function New-DeviceCard($device) {
     $script:MouseStart = $null
   })
   $device | Add-Member -NotePropertyName Card -NotePropertyValue $card -Force
+  $device | Add-Member -NotePropertyName LabelControl -NotePropertyValue $label -Force
   $device | Add-Member -NotePropertyName Select -NotePropertyValue $check -Force
   $device | Add-Member -NotePropertyName Picture -NotePropertyValue $picture -Force
+  $device | Add-Member -NotePropertyName Host -NotePropertyValue $screenHost -Force
+  $device | Add-Member -NotePropertyName StateLabel -NotePropertyValue $state -Force
+  $device | Add-Member -NotePropertyName LiveWindowHandle -NotePropertyValue ([IntPtr]::Zero) -Force
+  $device | Add-Member -NotePropertyName LiveProcess -NotePropertyValue $null -Force
+  $screenHost.Add_Resize({
+    param($sender,$e)
+    $d = $script:Devices | Where-Object { $_.Serial -eq [string]$sender.Tag } | Select-Object -First 1
+    if ($d -and $d.LiveWindowHandle -and $d.LiveWindowHandle -ne [IntPtr]::Zero) {
+      [void][PCLWin32]::MoveWindow($d.LiveWindowHandle,0,0,$sender.ClientSize.Width,$sender.ClientSize.Height,$true)
+    }
+  })
   return $card
+}
+
+function Layout-DeviceCards {
+  if ($script:Devices.Count -eq 0 -or $panel.ClientSize.Width -lt 100 -or $panel.ClientSize.Height -lt 100) { return }
+  $count = $script:Devices.Count
+  $columns = [int][Math]::Ceiling([Math]::Sqrt($count))
+  $rows = [int][Math]::Ceiling($count/[double]$columns)
+  $tileW = [int][Math]::Floor($panel.ClientSize.Width/[double]$columns)
+  $tileH = [int][Math]::Floor($panel.ClientSize.Height/[double]$rows)
+  for ($i=0; $i -lt $count; $i++) {
+    $device = $script:Devices[$i]
+    $cardW = [Math]::Max(120,$tileW-16)
+    $cardH = [Math]::Max(105,$tileH-16)
+    $device.Card.Size = New-Object System.Drawing.Size($cardW,$cardH)
+    $checkW = [int][Math]::Max(42,[Math]::Min(90,$cardW*0.48))
+    $device.Select.Size = New-Object System.Drawing.Size($checkW,22)
+    $device.Select.Text = if ($cardW -lt 170) { 'BC' } else { 'Broadcast' }
+    $labelX = $checkW + 12
+    $device.LabelControl.Location = New-Object System.Drawing.Point($labelX,8)
+    $device.LabelControl.Size = New-Object System.Drawing.Size([Math]::Max(35,$cardW-$labelX-12),22)
+    $screenW = [Math]::Max(80,$cardW-20)
+    $screenH = [Math]::Max(55,$cardH-78)
+    $device.Picture.Location = New-Object System.Drawing.Point(10,35)
+    $device.Picture.Size = New-Object System.Drawing.Size($screenW,$screenH)
+    $device.Host.Location = New-Object System.Drawing.Point(10,35)
+    $device.Host.Size = New-Object System.Drawing.Size($screenW,$screenH)
+    $device.StateLabel.Location = New-Object System.Drawing.Point(10,[Math]::Max(72,$cardH-35))
+    $device.StateLabel.Size = New-Object System.Drawing.Size($screenW,26)
+    if ($device.LiveWindowHandle -and $device.LiveWindowHandle -ne [IntPtr]::Zero) {
+      [void][PCLWin32]::MoveWindow($device.LiveWindowHandle,0,0,$screenW,$screenH,$true)
+    }
+  }
 }
 
 function Refresh-Previews {
@@ -379,13 +526,18 @@ $script:PreviewWorker.add_RunWorkerCompleted({
       Remove-Item $result.Path -Force -ErrorAction SilentlyContinue
     }
   }
-  $status.Text = "Preview diperbarui untuk perangkat tersambung. Klik gambar untuk kontrol individual; centang Broadcast lalu klik untuk mengirim tap/swipe yang sama ke HP terpilih."
-  $status.ForeColor = [System.Drawing.Color]::FromArgb(190,205,214)
+  if ($script:LiveProcesses.Count -eq 0 -or $broadcast.Checked) {
+    $status.Text = if ($broadcast.Checked) { 'Mode broadcast: klik/seret pada snapshot untuk mengirim input ke HP terpilih.' } else { 'Preview diperbarui. Buka layar LIVE untuk kontrol video langsung di dashboard.' }
+    $status.ForeColor = [System.Drawing.Color]::FromArgb(190,205,214)
+  }
 })
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 4500
 $timer.Add_Tick({ Refresh-Previews })
+$liveWatchTimer = New-Object System.Windows.Forms.Timer
+$liveWatchTimer.Interval = 1000
+$liveWatchTimer.Add_Tick({ Watch-LiveProcesses })
 
 $download.Add_Click({
   $download.Enabled = $false
@@ -430,17 +582,19 @@ $refresh.Add_Click({
         $rows += [pscustomobject]@{Serial=$serial; State=$state; Label=$label; Width=$size.Width; Height=$size.Height}
       }
     }
+    Close-LiveMosaic $false
     $oldDevices = $script:Devices
     foreach ($oldDevice in $oldDevices) { if ($oldDevice.Picture -and $oldDevice.Picture.Image) { $oldDevice.Picture.Image.Dispose() } }
     $script:Devices = @($rows | Select-Object -First $script:MaxDevices)
     $panel.SuspendLayout(); $panel.Controls.Clear()
     foreach ($device in $script:Devices) { [void]$panel.Controls.Add((New-DeviceCard $device)) }
     $panel.ResumeLayout()
+    Layout-DeviceCards
     $ready = @($script:Devices | Where-Object { $_.State -eq 'device' }).Count
     $unauthorized = @($script:Devices | Where-Object { $_.State -eq 'unauthorized' }).Count
     if ($rows.Count -gt $script:MaxDevices) { $status.Text = "Terdeteksi $($rows.Count); batas 30, menampilkan 30 pertama. Putuskan perangkat tambahan untuk mengganti daftar." }
     elseif ($rows.Count -eq 0) { $status.Text = 'Belum ada perangkat. Periksa kabel data dan USB debugging.' }
-    else { $status.Text = "Terdeteksi $($rows.Count) HP · $ready siap · $unauthorized perlu persetujuan USB debugging. Preview diperbarui berkala." }
+    else { $status.Text = "Terdeteksi $($rows.Count) HP · $ready siap · $unauthorized perlu persetujuan USB debugging. Tekan Tampilkan layar LIVE di sini untuk video langsung." }
     $status.ForeColor = [System.Drawing.Color]::FromArgb(96,225,190)
     $script:ActiveSerial = if ($ready -gt 0) { ($script:Devices | Where-Object { $_.State -eq 'device' } | Select-Object -First 1).Serial } else { $null }
   } catch {
@@ -448,15 +602,35 @@ $refresh.Add_Click({
     $status.ForeColor = [System.Drawing.Color]::FromArgb(248,113,113)
   } finally { $refresh.Enabled = $true; $form.Cursor = [System.Windows.Forms.Cursors]::Default }
   Refresh-Previews
+  if (-not $broadcast.Checked) { $timer.Interval = 4500; $timer.Start() }
 })
 
 $selectAll.Add_Click({ foreach ($device in $script:Devices) { if ($device.State -eq 'device') { $device.Select.Checked = $true } } })
 $liveButton.Add_Click({ Start-LiveMosaic })
-$closeLiveButton.Add_Click({ Close-LiveMosaic; $timer.Start(); $status.Text = 'Semua jendela mosaik live Phone Control Lite ditutup.' })
+$closeLiveButton.Add_Click({ Close-LiveMosaic; $status.Text = 'Stream live ditutup. Preview snapshot kembali aktif.' })
+$broadcast.Add_CheckedChanged({
+  if ($broadcast.Checked) {
+    foreach ($device in $script:Devices) { if ($device.Host) { $device.Host.Visible = $false }; if ($device.Picture) { $device.Picture.Visible = $true } }
+    $timer.Interval = 1200
+    $timer.Start()
+    Refresh-Previews
+    $status.Text = 'Mode broadcast: klik/seret pada snapshot untuk mengirim input ke semua HP yang dicentang.'
+  } else {
+    if ($script:LiveProcesses.Count -gt 0) {
+      foreach ($device in $script:Devices) { if ($device.LiveWindowHandle -ne [IntPtr]::Zero) { $device.Picture.Visible = $false; $device.Host.Visible = $true } }
+      $timer.Stop()
+      $status.Text = 'Layar LIVE kembali tampil di dashboard. Klik layar HP untuk kontrol individual.'
+    } else {
+      $timer.Interval = 4500
+      $timer.Start()
+    }
+  }
+})
+$form.Add_Resize({ if ($form.WindowState -ne [System.Windows.Forms.FormWindowState]::Minimized) { Layout-DeviceCards } })
 $back.Add_Click({ Send-Action 'back' })
 $homeButton.Add_Click({ Send-Action 'home' })
 $textButton.Add_Click({ Send-Action 'text' $null 0 0 0 0 350 $sendText.Text })
-$form.Add_FormClosing({ $timer.Stop(); Close-LiveMosaic; foreach ($device in $script:Devices) { if ($device.Picture.Image) { $device.Picture.Image.Dispose() } } })
+$form.Add_FormClosing({ $timer.Stop(); $liveWatchTimer.Stop(); Close-LiveMosaic $false; foreach ($device in $script:Devices) { if ($device.Picture.Image) { $device.Picture.Image.Dispose() } } })
 
 Set-ReadyState
 $timer.Start()
