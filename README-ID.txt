@@ -1,22 +1,25 @@
-PHONE CONTROL LITE — Windows
-============================
+PHONE CONTROL LITE — Multi HP untuk Windows
+============================================
 
-Aplikasi kecil ini menyediakan antarmuka sederhana untuk menyiapkan dan menjalankan scrcpy resmi. Scrcpy adalah proyek open-source terpisah (Apache-2.0); paket ini tidak menyalin kode scrcpy. Saat tombol Unduh/Perbarui ditekan, aplikasi mengambil arsip Windows x64 langsung dari rilis resmi Genymobile/scrcpy di GitHub.
+Launcher sederhana untuk mendeteksi dan membuka kontrol hingga 30 HP Android sekaligus. Setiap HP dibuka di jendela scrcpy terpisah.
 
 CARA PAKAI
 1. Ekstrak ZIP ke folder di PC Windows.
 2. Klik dua kali Start-PhoneControlLite.bat.
-3. Pastikan PC terhubung ke internet, lalu tekan Unduh / Perbarui.
-4. Di HP Android, aktifkan Opsi Pengembang > USB debugging.
-5. Sambungkan HP dengan kabel USB yang mendukung transfer data dan buka kunci HP.
-6. Jika muncul pesan Allow USB debugging, setujui di HP. Pilih 'Always allow from this computer' hanya jika PC itu milik Anda dan memang diinginkan.
-7. Tekan Periksa koneksi, lalu Mulai kontrol.
+3. Pastikan internet tersedia, lalu tekan Unduh / Perbarui scrcpy. Aplikasi mengambil rilis Windows x64 langsung dari GitHub resmi Genymobile/scrcpy.
+4. Di setiap HP Android, aktifkan Opsi Pengembang > USB debugging.
+5. Hubungkan HP menggunakan kabel USB data dan buka kunci perangkat.
+6. Setujui dialog Allow USB debugging pada setiap HP.
+7. Tekan Muat ulang perangkat, centang HP yang ingin dikontrol, lalu tekan Buka kontrol terpilih.
 
-PENTING
-- Ini hanya untuk Android, bukan iPhone.
-- USB debugging dan persetujuan otorisasi di HP diperlukan. Jika layar HP mati/pecah dan Anda tidak bisa menyetujui dialog, aplikasi mungkin tidak dapat tersambung. Coba mouse USB melalui adaptor OTG bila layar sentuh yang rusak tetapi tampilan masih terlihat.
-- Untuk keamanan, jangan menyetujui debugging di PC umum/yang tidak dipercaya. Cabut USB debugging setelah selesai jika tidak diperlukan.
-- Aplikasi ini tidak membuka kunci layar, melewati PIN, atau mengakali proteksi Android.
-- Windows x64 dan PowerShell bawaan Windows diperlukan. Unduhan scrcpy pertama membutuhkan internet.
-- Unduhan berasal dari GitHub resmi: https://github.com/Genymobile/scrcpy
-- Repo kode scrcpy: https://github.com/Genymobile/scrcpy (Apache-2.0).
+BATAS DAN CATATAN
+- Maksimum 30 perangkat ditampilkan dan dapat dipilih oleh aplikasi.
+- Masing-masing HP dibuka dalam jendela scrcpy terpisah. Kinerja 30 layar sekaligus bergantung pada CPU/GPU, RAM, port dan hub USB, kabel, resolusi serta frame rate.
+- Jika HP lebih dari 30 terhubung, aplikasi menampilkan 30 perangkat pertama yang dilaporkan ADB.
+- Status unauthorized berarti izin debugging belum disetujui di layar HP.
+- Ini hanya untuk Android, bukan iPhone. Windows 10/11 64-bit dan PowerShell bawaan Windows diperlukan.
+- Jika layar HP tidak bisa dipakai untuk menyetujui dialog, koneksi mungkin tidak dapat dimulai. Mouse USB melalui adaptor OTG bisa membantu bila gambar masih terlihat.
+- Jangan mengotorisasi USB debugging pada komputer umum/tidak dipercaya. Aplikasi tidak membuka kunci, melewati PIN, atau mengakali proteksi Android.
+
+SUMBER
+scrcpy resmi: https://github.com/Genymobile/scrcpy (Apache-2.0). Phone Control Lite adalah launcher independen dan bukan produk resmi Genymobile.

@@ -1,14 +1,11 @@
-# Phone Control Lite
+# Phone Control Lite — Multi HP
 
-Halaman unduhan responsif untuk utilitas Windows kecil yang menyiapkan dan menjalankan scrcpy resmi untuk Android.
+Halaman unduhan dan launcher Windows untuk mendeteksi serta mengontrol hingga 30 perangkat Android melalui USB. Setiap perangkat dibuka di jendela scrcpy terpisah.
 
-## Isi
-- `index.html` — landing page statis untuk GitHub Pages.
-- `downloads/PhoneControlLite-Windows.zip` — launcher PowerShell dan petunjuk berbahasa Indonesia.
-- `PhoneControlLite.ps1` dan `Start-PhoneControlLite.bat` — sumber launcher.
+- Landing page: `index.html`
+- ZIP Windows: `downloads/PhoneControlLite-Windows.zip`
+- Launcher: `PhoneControlLite.ps1` dan `Start-PhoneControlLite.bat`
 
-## GitHub Pages
-Repositori ini dapat disajikan langsung dari branch `main`, folder `/`.
+Launcher mengunduh scrcpy untuk Windows x64 dari rilis GitHub resmi Genymobile. USB debugging dan persetujuan pada setiap HP diperlukan. Kinerja multi-layar bergantung pada kemampuan PC dan koneksi USB. Maksimum 30 perangkat terdeteksi/ditampilkan.
 
-## Catatan
-Launcher hanya mengunduh scrcpy dari rilis GitHub resmi Genymobile. Scrcpy adalah proyek terpisah berlisensi Apache-2.0. Dibutuhkan USB debugging dan persetujuan di layar HP. Bukan produk resmi Genymobile.
+scrcpy adalah proyek terpisah berlisensi Apache-2.0; Phone Control Lite bukan produk resmi Genymobile.
