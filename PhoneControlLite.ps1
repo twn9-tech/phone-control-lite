@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.ComponentModel
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -422,10 +422,10 @@ $refresh.Add_Click({
     $lines = & $script:AdbExe devices -l 2>&1
     $rows = @()
     foreach ($line in $lines) {
-      if ($line -match '^([^\s]+)\s+(device|unauthorized|offline)(?:\s+(.*))?$') {
+      if ($line -match '^(.*?)\s+(device|unauthorized|offline)(?:\s+(.*))?$') {
         $serial = $Matches[1]; $state = $Matches[2]; $details = $Matches[3]
         $label = $serial
-        if ($details -match '(?:^|\s)model:([^\s]+)') { $label = $Matches[1] -replace '_',' ' }
+        if ($details -match '(?:^|\s)model:(\S+)') { $label = $Matches[1] -replace '_',' ' }
         $size = if ($state -eq 'device') { Get-ScreenSize $serial } else { @{Width=1080;Height=1920} }
         $rows += [pscustomobject]@{Serial=$serial; State=$state; Label=$label; Width=$size.Width; Height=$size.Height}
       }
